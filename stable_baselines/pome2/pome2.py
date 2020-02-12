@@ -7,11 +7,11 @@ import tensorflow as tf
 from stable_baselines import logger
 from stable_baselines.common import explained_variance, ActorCriticRLModel, tf_util, SetVerbosity, TensorboardWriter
 from stable_baselines.common.runners import AbstractEnvRunner
-from stable_baselines.pome.policy import POMEPolicy
+from stable_baselines.common.policies import ActorCriticPolicy, RecurrentActorCriticPolicy
 from stable_baselines.a2c.utils import total_episode_reward_logger
 
 
-class POME(ActorCriticRLModel):
+class POME2(ActorCriticRLModel):
     """
     Proximal Policy Optimization algorithm (GPU version).
     Paper: https://arxiv.org/abs/1707.06347
@@ -48,7 +48,7 @@ class POME(ActorCriticRLModel):
     :param n_cpu_tf_sess: (int) The number of threads for TensorFlow operations
         If None, the number of cpu of the current machine will be used.
     """
-    def __init__(self, policy, env, gamma=0.99, alpha=0.1, n_steps=128, ent_coef=0.01, learning_rate=2.5e-4, vf_coef=0.5,
+    def __init__(self, policy, env, gamma=0.99, n_steps=128, ent_coef=0.01, learning_rate=2.5e-4, vf_coef=0.5,
                  max_grad_norm=0.5, lam=0.95, nminibatches=4, noptepochs=4, cliprange=0.2, cliprange_vf=None,
                  verbose=0, tensorboard_log=None, _init_setup_model=True, policy_kwargs=None,
                  full_tensorboard_log=False, seed=None, n_cpu_tf_sess=None):
@@ -61,7 +61,6 @@ class POME(ActorCriticRLModel):
         self.vf_coef = vf_coef
         self.max_grad_norm = max_grad_norm
         self.gamma = gamma
-        self.alpha = alpha
         self.lam = lam
         self.nminibatches = nminibatches
         self.noptepochs = noptepochs
@@ -97,7 +96,7 @@ class POME(ActorCriticRLModel):
 
     def _make_runner(self):
         return Runner(env=self.env, model=self, n_steps=self.n_steps,
-                      gamma=self.gamma, lam=self.lam, alpha=self.alpha)
+                      gamma=self.gamma, lam=self.lam)
 
     def _get_pretrain_placeholders(self):
         policy = self.act_model
@@ -108,7 +107,7 @@ class POME(ActorCriticRLModel):
     def setup_model(self):
         with SetVerbosity(self.verbose):
 
-            assert issubclass(self.policy, POMEPolicy), "Error: the input policy for the PPO2 model must be " \
+            assert issubclass(self.policy, ActorCriticPolicy), "Error: the input policy for the PPO2 model must be " \
                                                                "an instance of common.policies.ActorCriticPolicy."
 
             self.n_batch = self.n_envs * self.n_steps
@@ -120,6 +119,11 @@ class POME(ActorCriticRLModel):
 
                 n_batch_step = None
                 n_batch_train = None
+                if issubclass(self.policy, RecurrentActorCriticPolicy):
+                    assert self.n_envs % self.nminibatches == 0, "For recurrent policies, "\
+                        "the number of environments run in parallel should be a multiple of nminibatches."
+                    n_batch_step = self.n_envs
+                    n_batch_train = self.n_batch // self.nminibatches
 
                 act_model = self.policy(self.sess, self.observation_space, self.action_space, self.n_envs, 1,
                                         n_batch_step, reuse=False, **self.policy_kwargs)
@@ -239,7 +243,7 @@ class POME(ActorCriticRLModel):
     def _train_step(self, learning_rate, cliprange, obs, returns, masks, actions, values, neglogpacs, update,
                     writer, states=None, cliprange_vf=None):
         """
-        Training of POME Algorithm
+        Training of PPO2 Algorithm
 
         :param learning_rate: (float) learning rate
         :param cliprange: (float) Clipping factor
@@ -423,7 +427,7 @@ class POME(ActorCriticRLModel):
 
 
 class Runner(AbstractEnvRunner):
-    def __init__(self, *, env, model, n_steps, gamma, lam, alpha):
+    def __init__(self, *, env, model, n_steps, gamma, lam):
         """
         A runner to learn the policy of an environment for a model
 
@@ -436,7 +440,6 @@ class Runner(AbstractEnvRunner):
         super().__init__(env=env, model=model, n_steps=n_steps)
         self.lam = lam
         self.gamma = gamma
-        self.alpha = alpha
 
     def run(self):
         """
@@ -456,10 +459,9 @@ class Runner(AbstractEnvRunner):
         mb_obs, mb_rewards, mb_actions, mb_values, mb_dones, mb_neglogpacs = [], [], [], [], [], []
         mb_states = self.states
         ep_infos = []
-        mb_pred_reward = []
         for _ in range(self.n_steps):
-            actions, values, predict_rewards, self.states, neglogpacs = self.model.step(self.obs, self.states, self.dones)
-            mb_pred_reward.append(predict_rewards)
+            actions, values, self.states, neglogpacs = self.model.step(self.obs, self.states, self.dones)
+            print(actions)
             mb_obs.append(self.obs.copy())
             mb_actions.append(actions)
             mb_values.append(values)
@@ -495,10 +497,6 @@ class Runner(AbstractEnvRunner):
                 nextnonterminal = 1.0 - mb_dones[step + 1]
                 nextvalues = mb_values[step + 1]
             delta = mb_rewards[step] + self.gamma * nextvalues * nextnonterminal - mb_values[step]
-            # TODO: add the ME part to delta
-            q_env = mb_rewards[step] + self.gamma * nextvalues * nextnonterminal
-            q_model = mb_pred_reward[step] + self.gamma * nextvalues * nextnonterminal
-            delta = delta + self.alpha * np.linalg.norm()
             mb_advs[step] = last_gae_lam = delta + self.gamma * self.lam * nextnonterminal * last_gae_lam
         mb_returns = mb_advs + mb_values
 

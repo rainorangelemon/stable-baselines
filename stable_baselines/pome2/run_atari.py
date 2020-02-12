@@ -1,4 +1,4 @@
-from stable_baselines import POME, logger
+from stable_baselines import PPO2, logger
 from stable_baselines.common.cmd_util import make_atari_env, atari_arg_parser
 from stable_baselines.common.vec_env import VecFrameStack
 from stable_baselines.common.policies import CnnPolicy, CnnLstmPolicy, CnnLnLstmPolicy, MlpPolicy
@@ -7,7 +7,7 @@ from stable_baselines.common.policies import CnnPolicy, CnnLstmPolicy, CnnLnLstm
 def train(env_id, num_timesteps, seed, policy,
           n_envs=8, nminibatches=4, n_steps=128):
     """
-    Train POME model for atari environment, for testing purposes
+    Train PPO2 model for atari environment, for testing purposes
 
     :param env_id: (str) the environment id string
     :param num_timesteps: (int) the number of timesteps to run
@@ -22,7 +22,7 @@ def train(env_id, num_timesteps, seed, policy,
 
     env = VecFrameStack(make_atari_env(env_id, n_envs, seed), 4)
     policy = {'cnn': CnnPolicy, 'lstm': CnnLstmPolicy, 'lnlstm': CnnLnLstmPolicy, 'mlp': MlpPolicy}[policy]
-    model = POME(policy=policy, env=env, n_steps=n_steps, nminibatches=nminibatches,
+    model = PPO2(policy=policy, env=env, n_steps=n_steps, nminibatches=nminibatches,
                  lam=0.95, gamma=0.99, noptepochs=4, ent_coef=.01,
                  learning_rate=lambda f: f * 2.5e-4, cliprange=lambda f: f * 0.1, verbose=1)
     model.learn(total_timesteps=num_timesteps)
