@@ -52,6 +52,11 @@ class POMEPolicy(BasePolicy):
         super(POMEPolicy, self).__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch, reuse=reuse,
                                                 scale=(feature_extraction == "cnn"))
 
+        self._pdtype = make_proba_dist_type(ac_space)
+        self._proba_distribution = None
+        self._value_fn = None
+        self._action = None
+        self._deterministic_action = None
         self._policy = None
         self.n_actions = ac_space.n
         self._kwargs_check(feature_extraction, kwargs)
@@ -184,14 +189,17 @@ class POMEPolicy(BasePolicy):
         """tf.Tensor: parameters of the probability distribution. Depends on pdtype."""
         return self._policy_proba
 
-    def step(self, obs, state=None, mask=None, deterministic=False):
+    def step(self, obs, state=None, mask=None, deterministic=False, need_model=False):
         if deterministic:
             action, value, reward, neglogp = self.sess.run([self.deterministic_action, self.value_flat, self.reward_flat, self.neglogp],
                                                 {self.obs_ph: obs})
         else:
             action, value, reward, neglogp = self.sess.run([self.action, self.value_flat, self.reward_flat, self.neglogp],
                                                 {self.obs_ph: obs})
-        return action, value, reward, self.initial_state, neglogp
+        if need_model:
+            return action, value, reward, self.initial_state, neglogp
+        else:
+            return action, value, self.initial_state, neglogp
 
     def proba_step(self, obs, state=None, mask=None):
         return self.sess.run(self.policy_proba, {self.obs_ph: obs})

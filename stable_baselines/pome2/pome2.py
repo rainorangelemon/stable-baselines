@@ -107,9 +107,6 @@ class POME2(ActorCriticRLModel):
     def setup_model(self):
         with SetVerbosity(self.verbose):
 
-            assert issubclass(self.policy, ActorCriticPolicy), "Error: the input policy for the PPO2 model must be " \
-                                                               "an instance of common.policies.ActorCriticPolicy."
-
             self.n_batch = self.n_envs * self.n_steps
 
             self.graph = tf.Graph()
@@ -460,8 +457,7 @@ class Runner(AbstractEnvRunner):
         mb_states = self.states
         ep_infos = []
         for _ in range(self.n_steps):
-            actions, values, self.states, neglogpacs = self.model.step(self.obs, self.states, self.dones)
-            print(actions)
+            actions, values, rewards_pred, self.states, neglogpacs = self.model.step(self.obs, self.states, self.dones, need_model=True)
             mb_obs.append(self.obs.copy())
             mb_actions.append(actions)
             mb_values.append(values)

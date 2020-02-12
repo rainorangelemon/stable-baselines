@@ -5,6 +5,7 @@ from stable_baselines.common.vec_env import DummyVecEnv
 from stable_baselines.common.vec_env import VecFrameStack
 from stable_baselines.common.cmd_util import make_atari_env
 from stable_baselines import POME2
+from stable_baselines.pome2.policy import POMEPolicy
 import numpy as np
 from tqdm import tqdm
 import tensorflow as tf
@@ -17,7 +18,7 @@ env = VecFrameStack(env, n_stack=4)
 # the env is now wrapped automatically when passing it to the constructor
 # env = DummyVecEnv([lambda: env])
 
-model = POME2(MlpPolicy, env, verbose=1)
+model = POME2(POMEPolicy, env, verbose=1)
 model.learn(total_timesteps=10000)
 
 
