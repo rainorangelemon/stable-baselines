@@ -4,7 +4,7 @@ from abc import abstractmethod
 from stable_baselines.common.distributions import make_proba_dist_type, CategoricalProbabilityDistribution, \
     MultiCategoricalProbabilityDistribution, DiagGaussianProbabilityDistribution, BernoulliProbabilityDistribution
 from stable_baselines.common.policies import nature_cnn,  mlp_extractor, BasePolicy
-from stable_baselines.a2c.utils import linear, conv, conv_to_fc
+from stable_baselines.a2c.utils import linear, conv, conv_to_fc, deconv
 import numpy as np
 
 
@@ -43,10 +43,6 @@ class POMEPolicy(BasePolicy):
     :param scale: (bool) whether or not to scale the input
     """
 
-    def dynamic_nn(self, scaled_images, **kargs):
-        shape = tf.shape(scaled_images)[0]
-
-
     def __init__(self, sess, ob_space, ac_space, n_env, n_steps, n_batch, reuse=False, layers=None, net_arch=None,
                  act_fun=tf.tanh, cnn_extractor=nature_cnn, feature_extraction="cnn", **kwargs):
         super(POMEPolicy, self).__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch, reuse=reuse,
@@ -59,6 +55,7 @@ class POMEPolicy(BasePolicy):
         self._deterministic_action = None
         self._policy = None
         self.n_actions = ac_space.n
+        self.n_ob = (ob_space.shape[0], ob_space.shape[1])
         self._kwargs_check(feature_extraction, kwargs)
 
         if layers is not None:
@@ -70,8 +67,7 @@ class POMEPolicy(BasePolicy):
 
         def a3c_cnn(scaled_images, **kwargs):
             """
-            CNN from Nature paper.
-
+            CNN from A3C paper.
             :param scaled_images: (TensorFlow Tensor) Image input placeholder
             :param kwargs: (dict) Extra keywords parameters for the convolutional layers of the CNN
             :return: (TensorFlow Tensor) The CNN output layer
@@ -90,26 +86,38 @@ class POMEPolicy(BasePolicy):
             :param kwargs: (dict) Extra keywords parameters for the convolutional layers of the CNN
             :return: (TensorFlow Tensor) The CNN output layer
             """
+            action_one_hot = tf.one_hot(action, self.n_actions)
+            single_action_map = tf.reshape(action_one_hot, [-1, 1, 1, self.n_actions])
+            action_map = tf.tile(single_action_map, (1, self.n_ob[0], self.n_ob[1], 1))
+            merge_map = tf.concat([scaled_images, action_map], axis=-1)
+
             activ = tf.nn.relu
-            layer_1 = activ(
-                conv(scaled_images, 'c3', n_filters=16, filter_size=8, stride=4, init_scale=np.sqrt(2), **kwargs))
+            layer_1 = activ(conv(merge_map, 'c3', n_filters=16, filter_size=8, stride=4, init_scale=np.sqrt(2), **kwargs))
+            output_height = layer_1.shape[1]
+            output_width = layer_1.shape[2]
             layer_2 = activ(conv(layer_1, 'c4', n_filters=32, filter_size=4, stride=2, init_scale=np.sqrt(2), **kwargs))
-            layer_3 = conv_to_fc(layer_2)
-            layer_4 = tf.concat(values=[action, layer_3], axis=-1)
-            return tf.nn.sigmoid(linear(layer_4, 'fc2', n_hidden=256, init_scale=np.sqrt(2)))
+            layer_de_2 = activ(deconv(layer_2, 'c5', n_filters=16, filter_size=4, stride=2, output_height=output_height, output_width=output_width, init_scale=np.sqrt(2), **kwargs))
+            layer_de_1 = activ(deconv(layer_de_2, 'c6', n_filters=1, filter_size=8, stride=4, output_height=self.n_ob[0],
+                                      output_width=self.n_ob[1], init_scale=np.sqrt(2), **kwargs))
+            layer_3 = conv(layer_de_1, 'c7', n_filters=1, filter_size=3, stride=1, pad="SAME", init_scale=np.sqrt(2), **kwargs)
+            next_frame = tf.reshape(layer_3, [-1, self.n_ob[0], self.n_ob[1]])
+            rf_latent = conv_to_fc(layer_2)
+            return tf.nn.sigmoid(next_frame), linear(rf_latent, 'rf', 1)
 
         with tf.variable_scope("model", reuse=reuse):
             pi_latent = vf_latent = a3c_cnn(self.processed_obs, **kwargs)
 
             self._value_fn = linear(vf_latent, 'vf', 1)
-
-            self._reward_fn = linear(vf_latent, 'rf', self.n_actions)
             self._next_state_fn = linear(vf_latent, 'tf', 1)
 
             self._proba_distribution, self._policy, self.q_value = \
                 self.pdtype.proba_distribution_from_latent(pi_latent, vf_latent, init_scale=0.01)
 
         self._setup_init()
+
+        with tf.variable_scope("world_model", reuse=reuse):
+            self._next_frame, self._reward_fn = dynamics(self.processed_obs, self.action, **kwargs)
+            self._reward_flat = self.reward_fn[:, 0]
 
         self._pdtype = make_proba_dist_type(ac_space)
 
@@ -132,7 +140,6 @@ class POMEPolicy(BasePolicy):
             else:
                 self._policy_proba = []  # it will return nothing, as it is not implemented
             self._value_flat = self.value_fn[:, 0]
-            self._reward_flat = self.reward_fn[:, 0]
 
     @property
     def pdtype(self):
@@ -175,6 +182,11 @@ class POMEPolicy(BasePolicy):
         return self._action
 
     @property
+    def next_frame(self):
+        """tf.Tensor: stochastic action, of shape (self.n_batch, ) + self.ac_space.shape."""
+        return self._next_frame
+
+    @property
     def deterministic_action(self):
         """tf.Tensor: deterministic action, of shape (self.n_batch, ) + self.ac_space.shape."""
         return self._deterministic_action
@@ -191,13 +203,17 @@ class POMEPolicy(BasePolicy):
 
     def step(self, obs, state=None, mask=None, deterministic=False, need_model=False):
         if deterministic:
-            action, value, reward, neglogp = self.sess.run([self.deterministic_action, self.value_flat, self.reward_flat, self.neglogp],
+            action, value, neglogp = self.sess.run([self.deterministic_action, self.value_flat, self.neglogp],
                                                 {self.obs_ph: obs})
         else:
-            action, value, reward, neglogp = self.sess.run([self.action, self.value_flat, self.reward_flat, self.neglogp],
+            action, value, neglogp = self.sess.run([self.action, self.value_flat, self.neglogp],
                                                 {self.obs_ph: obs})
+        next_frame, reward = self.sess.run([self.next_frame, self.reward_flat], {self.obs_ph: obs, self.action: action})
+        # print(action)
+        # print(self.processed_obs)
+        # print(next_frame)
         if need_model:
-            return action, value, reward, self.initial_state, neglogp
+            return action, value, next_frame, reward, self.initial_state, neglogp
         else:
             return action, value, self.initial_state, neglogp
 

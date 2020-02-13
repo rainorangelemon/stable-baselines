@@ -168,7 +168,6 @@ class POME2(ActorCriticRLModel):
                             tf.clip_by_value(train_model.value_flat - self.old_vpred_ph,
                                              - self.clip_range_vf_ph, self.clip_range_vf_ph)
 
-
                     vf_losses1 = tf.square(vpred - self.rewards_ph)
                     vf_losses2 = tf.square(vpred_clipped - self.rewards_ph)
                     self.vf_loss = .5 * tf.reduce_mean(tf.maximum(vf_losses1, vf_losses2))
@@ -181,6 +180,7 @@ class POME2(ActorCriticRLModel):
                     self.approxkl = .5 * tf.reduce_mean(tf.square(neglogpac - self.old_neglog_pac_ph))
                     self.clipfrac = tf.reduce_mean(tf.cast(tf.greater(tf.abs(ratio - 1.0),
                                                                       self.clip_range_ph), tf.float32))
+                    # in PPO
                     loss = self.pg_loss - self.entropy * self.ent_coef + self.vf_loss * self.vf_coef
 
                     tf.summary.scalar('entropy_loss', self.entropy)
@@ -454,15 +454,18 @@ class Runner(AbstractEnvRunner):
         """
         # mb stands for minibatch
         mb_obs, mb_rewards, mb_actions, mb_values, mb_dones, mb_neglogpacs = [], [], [], [], [], []
+        mb_next_rewards, mb_model_next_states = [], []
         mb_states = self.states
         ep_infos = []
         for _ in range(self.n_steps):
-            actions, values, rewards_pred, self.states, neglogpacs = self.model.step(self.obs, self.states, self.dones, need_model=True)
+            actions, values, rewards_pred, next_frames, self.states, neglogpacs = self.model.step(self.obs, self.states, self.dones, need_model=True)
             mb_obs.append(self.obs.copy())
             mb_actions.append(actions)
             mb_values.append(values)
             mb_neglogpacs.append(neglogpacs)
             mb_dones.append(self.dones)
+            mb_next_rewards.append(rewards_pred)
+            mb_model_next_states.append(next_frames)
             clipped_actions = actions
             # Clip the actions to avoid out of bound error
             if isinstance(self.env.action_space, gym.spaces.Box):
@@ -480,6 +483,9 @@ class Runner(AbstractEnvRunner):
         mb_values = np.asarray(mb_values, dtype=np.float32)
         mb_neglogpacs = np.asarray(mb_neglogpacs, dtype=np.float32)
         mb_dones = np.asarray(mb_dones, dtype=np.bool)
+        mb_next_rewards = np.asarray(mb_next_rewards, dtype=np.float32)
+        mb_model_next_states = np.asarray(mb_model_next_states, dtype=np.float32)
+
         last_values = self.model.value(self.obs, self.states, self.dones)
         # discount/bootstrap off value fn
         mb_advs = np.zeros_like(mb_rewards)

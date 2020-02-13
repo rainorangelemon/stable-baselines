@@ -43,10 +43,6 @@ class POMEPolicy(BasePolicy):
     :param scale: (bool) whether or not to scale the input
     """
 
-    def dynamic_nn(self, scaled_images, **kargs):
-        shape = tf.shape(scaled_images)[0]
-
-
     def __init__(self, sess, ob_space, ac_space, n_env, n_steps, n_batch, reuse=False, layers=None, net_arch=None,
                  act_fun=tf.tanh, cnn_extractor=nature_cnn, feature_extraction="cnn", **kwargs):
         super(POMEPolicy, self).__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch, reuse=reuse,

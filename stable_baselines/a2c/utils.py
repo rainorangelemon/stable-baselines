@@ -140,6 +140,54 @@ def conv(input_tensor, scope, *, n_filters, filter_size, stride,
         return bias + tf.nn.conv2d(input_tensor, weight, strides=strides, padding=pad, data_format=data_format)
 
 
+def deconv(input_tensor, scope, *, n_filters, filter_size, stride,
+         pad='VALID', output_height, output_width, init_scale=1.0, data_format='NHWC', one_dim_bias=False):
+    """
+    Creates a 2d convolutional layer for TensorFlow
+
+    :param input_tensor: (TensorFlow Tensor) The input tensor for the convolution
+    :param scope: (str) The TensorFlow variable scope
+    :param n_filters: (int) The number of filters
+    :param filter_size:  (Union[int, [int], tuple<int, int>]) The filter size for the squared kernel matrix,
+    or the height and width of kernel filter if the input is a list or tuple
+    :param stride: (int) The stride of the convolution
+    :param pad: (str) The padding type ('VALID' or 'SAME')
+    :param init_scale: (int) The initialization scale
+    :param data_format: (str) The data format for the convolution weights
+    :param one_dim_bias: (bool) If the bias should be one dimentional or not
+    :return: (TensorFlow Tensor) 2d convolutional layer
+    """
+    if isinstance(filter_size, list) or isinstance(filter_size, tuple):
+        assert len(filter_size) == 2, \
+            "Filter size must have 2 elements (height, width), {} were given".format(len(filter_size))
+        filter_height = filter_size[0]
+        filter_width = filter_size[1]
+    else:
+        filter_height = filter_size
+        filter_width = filter_size
+    if data_format == 'NHWC':
+        channel_ax = 3
+        strides = [1, stride, stride, 1]
+        bshape = [1, 1, 1, n_filters]
+    elif data_format == 'NCHW':
+        channel_ax = 1
+        strides = [1, 1, stride, stride]
+        bshape = [1, n_filters, 1, 1]
+    else:
+        raise NotImplementedError
+    bias_var_shape = [n_filters] if one_dim_bias else [1, n_filters, 1, 1]
+    n_input = input_tensor.get_shape()[channel_ax].value
+    wshape = [filter_height, filter_width, n_filters, n_input]
+    with tf.variable_scope(scope):
+        weight = tf.get_variable("w", wshape, initializer=ortho_init(init_scale))
+        bias = tf.get_variable("b", bias_var_shape, initializer=tf.constant_initializer(0.0))
+        if not one_dim_bias and data_format == 'NHWC':
+            bias = tf.reshape(bias, bshape)
+        batch_size = tf.shape(input_tensor)[0]
+        deconv_shape = tf.stack([batch_size, output_height, output_width, n_filters])
+        return bias + tf.nn.conv2d_transpose(input_tensor, weight, output_shape=deconv_shape, strides=strides, padding="VALID", data_format=data_format)
+
+
 def linear(input_tensor, scope, n_hidden, *, init_scale=1.0, init_bias=0.0):
     """
     Creates a fully connected layer for TensorFlow
@@ -153,6 +201,24 @@ def linear(input_tensor, scope, n_hidden, *, init_scale=1.0, init_bias=0.0):
     """
     with tf.variable_scope(scope):
         n_input = input_tensor.get_shape()[1].value
+        weight = tf.get_variable("w", [n_input, n_hidden], initializer=ortho_init(init_scale))
+        bias = tf.get_variable("b", [n_hidden], initializer=tf.constant_initializer(init_bias))
+        return tf.matmul(input_tensor, weight) + bias
+
+
+def linear_general(input_tensor, scope, n_hidden, *, init_scale=1.0, init_bias=0.0):
+    """
+    Creates a fully connected layer for TensorFlow
+
+    :param input_tensor: (TensorFlow Tensor) The input tensor for the fully connected layer
+    :param scope: (str) The TensorFlow variable scope
+    :param n_hidden: (int) The number of hidden neurons
+    :param init_scale: (int) The initialization scale
+    :param init_bias: (int) The initialization offset bias
+    :return: (TensorFlow Tensor) fully connected layer
+    """
+    with tf.variable_scope(scope):
+        n_input = input_tensor.get_shape()[-1].value
         weight = tf.get_variable("w", [n_input, n_hidden], initializer=ortho_init(init_scale))
         bias = tf.get_variable("b", [n_hidden], initializer=tf.constant_initializer(init_bias))
         return tf.matmul(input_tensor, weight) + bias

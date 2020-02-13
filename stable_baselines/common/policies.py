@@ -114,6 +114,7 @@ class BasePolicy(ABC):
         self.n_batch = n_batch
         with tf.variable_scope("input", reuse=False):
             if obs_phs is None:
+                print("convert to scaling")
                 self._obs_ph, self._processed_obs = observation_input(ob_space, n_batch, scale=scale)
             else:
                 self._obs_ph, self._processed_obs = obs_phs
