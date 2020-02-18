@@ -222,3 +222,9 @@ class POMEPolicy(BasePolicy):
 
     def value(self, obs, state=None, mask=None):
         return self.sess.run(self.value_flat, {self.obs_ph: obs})
+
+    def value_simple(self, obs):
+        return self.sess.run(self.value_flat, {self.processed_obs: obs})
+
+    def scale_obs(self, obs):
+        return self.sess.run(self.processed_obs, {self.obs_ph: obs})

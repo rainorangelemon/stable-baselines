@@ -9,6 +9,7 @@ from stable_baselines.common import explained_variance, ActorCriticRLModel, tf_u
 from stable_baselines.common.runners import AbstractEnvRunner
 from stable_baselines.common.policies import ActorCriticPolicy, RecurrentActorCriticPolicy
 from stable_baselines.a2c.utils import total_episode_reward_logger
+from stable_baselines.pome2.policy import POMEPolicy
 
 
 class POME2(ActorCriticRLModel):
@@ -48,8 +49,8 @@ class POME2(ActorCriticRLModel):
     :param n_cpu_tf_sess: (int) The number of threads for TensorFlow operations
         If None, the number of cpu of the current machine will be used.
     """
-    def __init__(self, policy, env, gamma=0.99, n_steps=128, ent_coef=0.01, learning_rate=2.5e-4, vf_coef=0.5,
-                 max_grad_norm=0.5, lam=0.95, nminibatches=4, noptepochs=4, cliprange=0.2, cliprange_vf=None,
+    def __init__(self, policy, env, gamma=0.99, n_steps=128, ent_coef=0.01, learning_rate=2.5e-4, vf_coef=1., vm_coef=2.,
+                 max_grad_norm=0.5, lam=0.95, alpha=0.1, nminibatches=4, noptepochs=4, cliprange=0.2, cliprange_vf=None,
                  verbose=0, tensorboard_log=None, _init_setup_model=True, policy_kwargs=None,
                  full_tensorboard_log=False, seed=None, n_cpu_tf_sess=None):
 
@@ -59,9 +60,11 @@ class POME2(ActorCriticRLModel):
         self.n_steps = n_steps
         self.ent_coef = ent_coef
         self.vf_coef = vf_coef
+        self.vm_coef = vm_coef
         self.max_grad_norm = max_grad_norm
         self.gamma = gamma
         self.lam = lam
+        self.alpha = alpha
         self.nminibatches = nminibatches
         self.noptepochs = noptepochs
         self.tensorboard_log = tensorboard_log
@@ -77,6 +80,12 @@ class POME2(ActorCriticRLModel):
         self.entropy = None
         self.vf_loss = None
         self.pg_loss = None
+        self.rf_loss = None
+        self.sf_loss = None
+        self.rewards_realtime_ph = None
+        self.next_state_ph = None
+
+        self.model_loss = None
         self.approxkl = None
         self.clipfrac = None
         self._train = None
@@ -96,7 +105,7 @@ class POME2(ActorCriticRLModel):
 
     def _make_runner(self):
         return Runner(env=self.env, model=self, n_steps=self.n_steps,
-                      gamma=self.gamma, lam=self.lam)
+                      gamma=self.gamma, lam=self.lam, alpha=self.alpha)
 
     def _get_pretrain_placeholders(self):
         policy = self.act_model
@@ -116,7 +125,7 @@ class POME2(ActorCriticRLModel):
 
                 n_batch_step = None
                 n_batch_train = None
-                if issubclass(self.policy, RecurrentActorCriticPolicy):
+                if issubclass(self.policy, POMEPolicy):
                     assert self.n_envs % self.nminibatches == 0, "For recurrent policies, "\
                         "the number of environments run in parallel should be a multiple of nminibatches."
                     n_batch_step = self.n_envs
@@ -134,6 +143,10 @@ class POME2(ActorCriticRLModel):
                     self.action_ph = train_model.pdtype.sample_placeholder([None], name="action_ph")
                     self.advs_ph = tf.placeholder(tf.float32, [None], name="advs_ph")
                     self.rewards_ph = tf.placeholder(tf.float32, [None], name="rewards_ph")
+                    self.rewards_realtime_ph = tf.placeholder(tf.float32, [None], name="rewards_realtime_ph")
+
+                    self.next_state_ph = tf.placeholder(tf.float32, [None, self.observation_space.shape[0], self.observation_space.shape[1]], name="next_state_ph")
+
                     self.old_neglog_pac_ph = tf.placeholder(tf.float32, [None], name="old_neglog_pac_ph")
                     self.old_vpred_ph = tf.placeholder(tf.float32, [None], name="old_vpred_ph")
                     self.learning_rate_ph = tf.placeholder(tf.float32, [], name="learning_rate_ph")
@@ -143,6 +156,9 @@ class POME2(ActorCriticRLModel):
                     self.entropy = tf.reduce_mean(train_model.proba_distribution.entropy())
 
                     vpred = train_model.value_flat
+                    rpred = train_model.reward_flat
+                    spred = train_model.next_frame
+
 
                     # Value function clipping: not present in the original PPO
                     if self.cliprange_vf is None:
@@ -180,12 +196,20 @@ class POME2(ActorCriticRLModel):
                     self.approxkl = .5 * tf.reduce_mean(tf.square(neglogpac - self.old_neglog_pac_ph))
                     self.clipfrac = tf.reduce_mean(tf.cast(tf.greater(tf.abs(ratio - 1.0),
                                                                       self.clip_range_ph), tf.float32))
-                    # in PPO
-                    loss = self.pg_loss - self.entropy * self.ent_coef + self.vf_loss * self.vf_coef
+
+                    # for training model
+                    self.rf_loss = tf.reduce_mean(tf.square(rpred - self.rewards_realtime_ph))
+                    self.sf_loss = tf.reduce_mean(tf.square(spred - self.next_state_ph))
+                    self.model_loss = self.rf_loss + self.sf_loss
+
+                    # TODO: change this loss function
+                    loss = self.pg_loss - self.entropy * self.ent_coef + self.vf_loss * self.vf_coef + self.model_loss * self.vm_coef
 
                     tf.summary.scalar('entropy_loss', self.entropy)
                     tf.summary.scalar('policy_gradient_loss', self.pg_loss)
                     tf.summary.scalar('value_function_loss', self.vf_loss)
+                    tf.summary.scalar('reward_function_loss', self.rf_loss)
+                    tf.summary.scalar('state_function_loss', self.sf_loss)
                     tf.summary.scalar('approximate_kullback-leibler', self.approxkl)
                     tf.summary.scalar('clip_factor', self.clipfrac)
                     tf.summary.scalar('loss', loss)
@@ -202,13 +226,16 @@ class POME2(ActorCriticRLModel):
                 trainer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph, epsilon=1e-5)
                 self._train = trainer.apply_gradients(grads)
 
-                self.loss_names = ['policy_loss', 'value_loss', 'policy_entropy', 'approxkl', 'clipfrac']
+                self.loss_names = ['policy_loss', 'value_loss', 'policy_entropy', 'approxkl', 'clipfrac', 'reward_loss', 'state_loss']
 
                 with tf.variable_scope("input_info", reuse=False):
                     tf.summary.scalar('discounted_rewards', tf.reduce_mean(self.rewards_ph))
                     tf.summary.scalar('learning_rate', tf.reduce_mean(self.learning_rate_ph))
                     tf.summary.scalar('advantage', tf.reduce_mean(self.advs_ph))
                     tf.summary.scalar('clip_range', tf.reduce_mean(self.clip_range_ph))
+                    tf.summary.scalar('next_state', self.next_state_ph)
+                    tf.summary.scalar('real_time_rewards', self.rewards_realtime_ph)
+
                     if self.clip_range_vf_ph is not None:
                         tf.summary.scalar('clip_range_vf', tf.reduce_mean(self.clip_range_vf_ph))
 
@@ -232,13 +259,15 @@ class POME2(ActorCriticRLModel):
                 self.step = act_model.step
                 self.proba_step = act_model.proba_step
                 self.value = act_model.value
+                self.value_simple = act_model.value_simple
+                self.scale_obs = act_model.scale_obs
                 self.initial_state = act_model.initial_state
                 tf.global_variables_initializer().run(session=self.sess)  # pylint: disable=E1101
 
                 self.summary = tf.summary.merge_all()
 
-    def _train_step(self, learning_rate, cliprange, obs, returns, masks, actions, values, neglogpacs, update,
-                    writer, states=None, cliprange_vf=None):
+    def _train_step(self, learning_rate, cliprange, obs, returns, masks, actions, values, neglogpacs, true_rewards, next_states,
+                    update, writer, states=None, cliprange_vf=None):
         """
         Training of PPO2 Algorithm
 
@@ -262,7 +291,8 @@ class POME2(ActorCriticRLModel):
         td_map = {self.train_model.obs_ph: obs, self.action_ph: actions,
                   self.advs_ph: advs, self.rewards_ph: returns,
                   self.learning_rate_ph: learning_rate, self.clip_range_ph: cliprange,
-                  self.old_neglog_pac_ph: neglogpacs, self.old_vpred_ph: values}
+                  self.old_neglog_pac_ph: neglogpacs, self.old_vpred_ph: values,
+                  self.rewards_realtime_ph: true_rewards, self.next_state_ph: next_states}
         if states is not None:
             td_map[self.train_model.states_ph] = states
             td_map[self.train_model.dones_ph] = masks
@@ -280,22 +310,22 @@ class POME2(ActorCriticRLModel):
             if self.full_tensorboard_log and (1 + update) % 10 == 0:
                 run_options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
                 run_metadata = tf.RunMetadata()
-                summary, policy_loss, value_loss, policy_entropy, approxkl, clipfrac, _ = self.sess.run(
-                    [self.summary, self.pg_loss, self.vf_loss, self.entropy, self.approxkl, self.clipfrac, self._train],
+                summary, policy_loss, value_loss, policy_entropy, approxkl, clipfrac, reward_loss, state_loss, _ = self.sess.run(
+                    [self.summary, self.pg_loss, self.vf_loss, self.entropy, self.approxkl, self.clipfrac, self.rf_loss, self.sf_loss, self._train],
                     td_map, options=run_options, run_metadata=run_metadata)
                 writer.add_run_metadata(run_metadata, 'step%d' % (update * update_fac))
             else:
-                summary, policy_loss, value_loss, policy_entropy, approxkl, clipfrac, _ = self.sess.run(
-                    [self.summary, self.pg_loss, self.vf_loss, self.entropy, self.approxkl, self.clipfrac, self._train],
+                summary, policy_loss, value_loss, policy_entropy, approxkl, clipfrac, reward_loss, state_loss, _ = self.sess.run(
+                    [self.summary, self.pg_loss, self.vf_loss, self.entropy, self.approxkl, self.clipfrac, self.rf_loss, self.sf_loss, self._train],
                     td_map)
             writer.add_summary(summary, (update * update_fac))
         else:
-            policy_loss, value_loss, policy_entropy, approxkl, clipfrac, _ = self.sess.run(
-                [self.pg_loss, self.vf_loss, self.entropy, self.approxkl, self.clipfrac, self._train], td_map)
+            policy_loss, value_loss, policy_entropy, approxkl, clipfrac, reward_loss, state_loss, _ = self.sess.run(
+                [self.pg_loss, self.vf_loss, self.entropy, self.approxkl, self.clipfrac, self.rf_loss, self.sf_loss, self._train], td_map)
 
-        return policy_loss, value_loss, policy_entropy, approxkl, clipfrac
+        return policy_loss, value_loss, policy_entropy, approxkl, clipfrac, reward_loss, state_loss
 
-    def learn(self, total_timesteps, callback=None, log_interval=1, tb_log_name="PPO2",
+    def learn(self, total_timesteps, callback=None, log_interval=1, tb_log_name="POME2",
               reset_num_timesteps=True):
         # Transform to callable if needed
         self.learning_rate = get_schedule_fn(self.learning_rate)
@@ -324,42 +354,23 @@ class POME2(ActorCriticRLModel):
                 cliprange_now = self.cliprange(frac)
                 cliprange_vf_now = cliprange_vf(frac)
                 # true_reward is the reward without discount
-                obs, returns, masks, actions, values, neglogpacs, states, ep_infos, true_reward = self.runner.run()
+                obs, returns, masks, actions, values, neglogpacs, states, ep_infos, true_reward, model_next_states = self.runner.run()
                 self.num_timesteps += self.n_batch
                 self.ep_info_buf.extend(ep_infos)
                 mb_loss_vals = []
-                if states is None:  # nonrecurrent version
-                    update_fac = self.n_batch // self.nminibatches // self.noptepochs + 1
-                    inds = np.arange(self.n_batch)
-                    for epoch_num in range(self.noptepochs):
-                        np.random.shuffle(inds)
-                        for start in range(0, self.n_batch, batch_size):
-                            timestep = self.num_timesteps // update_fac + ((self.noptepochs * self.n_batch + epoch_num *
-                                                                            self.n_batch + start) // batch_size)
-                            end = start + batch_size
-                            mbinds = inds[start:end]
-                            slices = (arr[mbinds] for arr in (obs, returns, masks, actions, values, neglogpacs))
-                            mb_loss_vals.append(self._train_step(lr_now, cliprange_now, *slices, writer=writer,
-                                                                 update=timestep, cliprange_vf=cliprange_vf_now))
-                else:  # recurrent version
-                    update_fac = self.n_batch // self.nminibatches // self.noptepochs // self.n_steps + 1
-                    assert self.n_envs % self.nminibatches == 0
-                    env_indices = np.arange(self.n_envs)
-                    flat_indices = np.arange(self.n_envs * self.n_steps).reshape(self.n_envs, self.n_steps)
-                    envs_per_batch = batch_size // self.n_steps
-                    for epoch_num in range(self.noptepochs):
-                        np.random.shuffle(env_indices)
-                        for start in range(0, self.n_envs, envs_per_batch):
-                            timestep = self.num_timesteps // update_fac + ((self.noptepochs * self.n_envs + epoch_num *
-                                                                            self.n_envs + start) // envs_per_batch)
-                            end = start + envs_per_batch
-                            mb_env_inds = env_indices[start:end]
-                            mb_flat_inds = flat_indices[mb_env_inds].ravel()
-                            slices = (arr[mb_flat_inds] for arr in (obs, returns, masks, actions, values, neglogpacs))
-                            mb_states = states[mb_env_inds]
-                            mb_loss_vals.append(self._train_step(lr_now, cliprange_now, *slices, update=timestep,
-                                                                 writer=writer, states=mb_states,
-                                                                 cliprange_vf=cliprange_vf_now))
+
+                update_fac = self.n_batch // self.nminibatches // self.noptepochs + 1
+                inds = np.arange(self.n_batch)
+                for epoch_num in range(self.noptepochs):
+                    np.random.shuffle(inds)
+                    for start in range(0, self.n_batch, batch_size):
+                        timestep = self.num_timesteps // update_fac + ((self.noptepochs * self.n_batch + epoch_num *
+                                                                        self.n_batch + start) // batch_size)
+                        end = start + batch_size
+                        mbinds = inds[start:end]
+                        slices = (arr[mbinds] for arr in (obs, returns, masks, actions, values, neglogpacs, true_reward, model_next_states))
+                        mb_loss_vals.append(self._train_step(lr_now, cliprange_now, *slices, writer=writer,
+                                                             update=timestep, cliprange_vf=cliprange_vf_now))
 
                 loss_vals = np.mean(mb_loss_vals, axis=0)
                 t_now = time.time()
@@ -424,7 +435,7 @@ class POME2(ActorCriticRLModel):
 
 
 class Runner(AbstractEnvRunner):
-    def __init__(self, *, env, model, n_steps, gamma, lam):
+    def __init__(self, *, env, model, n_steps, gamma, lam, alpha):
         """
         A runner to learn the policy of an environment for a model
 
@@ -437,6 +448,7 @@ class Runner(AbstractEnvRunner):
         super().__init__(env=env, model=model, n_steps=n_steps)
         self.lam = lam
         self.gamma = gamma
+        self.alpha = alpha
 
     def run(self):
         """
@@ -454,28 +466,42 @@ class Runner(AbstractEnvRunner):
         """
         # mb stands for minibatch
         mb_obs, mb_rewards, mb_actions, mb_values, mb_dones, mb_neglogpacs = [], [], [], [], [], []
-        mb_next_rewards, mb_model_next_states = [], []
+        mb_model_next_rewards, mb_model_next_values = [], []
+        mb_next_states = []
         mb_states = self.states
         ep_infos = []
         for _ in range(self.n_steps):
-            actions, values, rewards_pred, next_frames, self.states, neglogpacs = self.model.step(self.obs, self.states, self.dones, need_model=True)
+            actions, values, next_frames, rewards_pred, self.states, neglogpacs = self.model.step(self.obs, self.states, self.dones, need_model=True)
             mb_obs.append(self.obs.copy())
             mb_actions.append(actions)
             mb_values.append(values)
             mb_neglogpacs.append(neglogpacs)
             mb_dones.append(self.dones)
-            mb_next_rewards.append(rewards_pred)
-            mb_model_next_states.append(next_frames)
+            mb_model_next_rewards.append(rewards_pred)
+            next_frames = np.concatenate((self.model.scale_obs(self.obs)[:, :, :, 1:], next_frames.reshape(4, 84, 84, 1)), axis=-1)
+            mb_model_next_value = self.model.value_simple(next_frames)
+            mb_model_next_values.append(mb_model_next_value)
             clipped_actions = actions
             # Clip the actions to avoid out of bound error
             if isinstance(self.env.action_space, gym.spaces.Box):
                 clipped_actions = np.clip(actions, self.env.action_space.low, self.env.action_space.high)
+            old_obs = np.array(self.model.scale_obs(self.obs))
             self.obs[:], rewards, self.dones, infos = self.env.step(clipped_actions)
+            new_obs = np.array(self.model.scale_obs(self.obs))
             for info in infos:
                 maybe_ep_info = info.get('episode')
                 if maybe_ep_info is not None:
                     ep_infos.append(maybe_ep_info)
             mb_rewards.append(rewards)
+            mb_next_state = np.zeros((4, 84, 84))
+            for batch in range(4):
+                if self.dones[batch]:
+                    # no transition since finished
+                    mb_next_state[batch] = old_obs[batch, :, :, -1]
+                else:
+                    # transition using envs
+                    mb_next_state[batch] = new_obs[batch, :, :, -1]
+            mb_next_states.append(mb_next_state)
         # batch of steps to batch of rollouts
         mb_obs = np.asarray(mb_obs, dtype=self.obs.dtype)
         mb_rewards = np.asarray(mb_rewards, dtype=np.float32)
@@ -483,8 +509,9 @@ class Runner(AbstractEnvRunner):
         mb_values = np.asarray(mb_values, dtype=np.float32)
         mb_neglogpacs = np.asarray(mb_neglogpacs, dtype=np.float32)
         mb_dones = np.asarray(mb_dones, dtype=np.bool)
-        mb_next_rewards = np.asarray(mb_next_rewards, dtype=np.float32)
-        mb_model_next_states = np.asarray(mb_model_next_states, dtype=np.float32)
+        mb_model_next_rewards = np.asarray(mb_model_next_rewards, dtype=np.float32)
+        mb_model_next_values = np.asarray(mb_model_next_values, dtype=np.float32)
+        mb_next_states = np.asarray(mb_next_states, dtype=np.float32)
 
         last_values = self.model.value(self.obs, self.states, self.dones)
         # discount/bootstrap off value fn
@@ -498,14 +525,17 @@ class Runner(AbstractEnvRunner):
             else:
                 nextnonterminal = 1.0 - mb_dones[step + 1]
                 nextvalues = mb_values[step + 1]
+            # delta = r(s') + gamma * V(s') - V(s)
             delta = mb_rewards[step] + self.gamma * nextvalues * nextnonterminal - mb_values[step]
-            mb_advs[step] = last_gae_lam = delta + self.gamma * self.lam * nextnonterminal * last_gae_lam
+            exploration_bonus = np.abs(mb_rewards[step] + self.gamma * nextvalues * nextnonterminal - mb_model_next_rewards[step] - self.gamma * mb_model_next_values[step])
+            exploration_bonus = exploration_bonus - np.mean(exploration_bonus)
+            mb_advs[step] = last_gae_lam = delta + exploration_bonus + self.gamma * self.lam * nextnonterminal * last_gae_lam
         mb_returns = mb_advs + mb_values
 
-        mb_obs, mb_returns, mb_dones, mb_actions, mb_values, mb_neglogpacs, true_reward = \
-            map(swap_and_flatten, (mb_obs, mb_returns, mb_dones, mb_actions, mb_values, mb_neglogpacs, true_reward))
+        mb_obs, mb_returns, mb_dones, mb_actions, mb_values, mb_neglogpacs, true_reward, mb_next_states = \
+            map(swap_and_flatten, (mb_obs, mb_returns, mb_dones, mb_actions, mb_values, mb_neglogpacs, true_reward, mb_next_states))
 
-        return mb_obs, mb_returns, mb_dones, mb_actions, mb_values, mb_neglogpacs, mb_states, ep_infos, true_reward
+        return mb_obs, mb_returns, mb_dones, mb_actions, mb_values, mb_neglogpacs, mb_states, ep_infos, true_reward, mb_next_states
 
 
 def get_schedule_fn(value_schedule):
