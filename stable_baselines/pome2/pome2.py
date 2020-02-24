@@ -529,7 +529,8 @@ class Runner(AbstractEnvRunner):
             delta = mb_rewards[step] + self.gamma * nextvalues * nextnonterminal - mb_values[step]
             exploration_bonus = np.abs(mb_rewards[step] + self.gamma * nextvalues * nextnonterminal - mb_model_next_rewards[step] - self.gamma * mb_model_next_values[step])
             exploration_bonus = exploration_bonus - np.mean(exploration_bonus)
-            mb_advs[step] = last_gae_lam = delta + exploration_bonus + self.gamma * self.lam * nextnonterminal * last_gae_lam
+            exploration_bonus = np.clip(exploration_bonus, -np.abs(delta), np.abs(delta))
+            mb_advs[step] = last_gae_lam = delta + self.alpha * exploration_bonus + self.gamma * self.lam * nextnonterminal * last_gae_lam
         mb_returns = mb_advs + mb_values
 
         mb_obs, mb_returns, mb_dones, mb_actions, mb_values, mb_neglogpacs, true_reward, mb_next_states = \
