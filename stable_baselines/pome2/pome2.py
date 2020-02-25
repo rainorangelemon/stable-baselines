@@ -233,8 +233,8 @@ class POME2(ActorCriticRLModel):
                     tf.summary.scalar('learning_rate', tf.reduce_mean(self.learning_rate_ph))
                     tf.summary.scalar('advantage', tf.reduce_mean(self.advs_ph))
                     tf.summary.scalar('clip_range', tf.reduce_mean(self.clip_range_ph))
-                    tf.summary.scalar('next_state', tf.reduce_mean(self.next_state_ph))
-                    tf.summary.scalar('real_time_rewards', tf.reduce_mean(self.rewards_realtime_ph))
+                    # tf.summary.scalar('next_state', tf.reduce_mean(self.next_state_ph))
+                    # tf.summary.scalar('real_time_rewards', tf.reduce_mean(self.rewards_realtime_ph))
 
                     if self.clip_range_vf_ph is not None:
                         tf.summary.scalar('clip_range_vf', tf.reduce_mean(self.clip_range_vf_ph))
