@@ -203,7 +203,7 @@ class POME2(ActorCriticRLModel):
                     self.model_loss = self.rf_loss + self.sf_loss
 
                     # TODO: change this loss function
-                    loss = self.pg_loss - self.entropy * self.ent_coef + self.vf_loss * self.vf_coef + self.model_loss * self.vm_coef
+                    loss = self.pg_loss + self.vf_loss * self.vf_coef + self.model_loss * self.vm_coef
 
                     tf.summary.scalar('entropy_loss', self.entropy)
                     tf.summary.scalar('policy_gradient_loss', self.pg_loss)
@@ -233,8 +233,8 @@ class POME2(ActorCriticRLModel):
                     tf.summary.scalar('learning_rate', tf.reduce_mean(self.learning_rate_ph))
                     tf.summary.scalar('advantage', tf.reduce_mean(self.advs_ph))
                     tf.summary.scalar('clip_range', tf.reduce_mean(self.clip_range_ph))
-                    tf.summary.scalar('next_state', self.next_state_ph)
-                    tf.summary.scalar('real_time_rewards', self.rewards_realtime_ph)
+                    tf.summary.scalar('next_state', tf.reduce_mean(self.next_state_ph))
+                    tf.summary.scalar('real_time_rewards', tf.reduce_mean(self.rewards_realtime_ph))
 
                     if self.clip_range_vf_ph is not None:
                         tf.summary.scalar('clip_range_vf', tf.reduce_mean(self.clip_range_vf_ph))
