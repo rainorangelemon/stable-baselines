@@ -105,7 +105,7 @@ class POME2(ActorCriticRLModel):
 
     def _make_runner(self):
         return Runner(env=self.env, model=self, n_steps=self.n_steps,
-                      gamma=self.gamma, lam=self.lam, alpha=self.alpha)
+                      gamma=self.gamma, lam=self.lam, alpha=self.alpha, batch_size=self.nminibatches)
 
     def _get_pretrain_placeholders(self):
         policy = self.act_model
@@ -435,7 +435,7 @@ class POME2(ActorCriticRLModel):
 
 
 class Runner(AbstractEnvRunner):
-    def __init__(self, *, env, model, n_steps, gamma, lam, alpha):
+    def __init__(self, *, env, model, n_steps, gamma, lam, alpha, batch_size):
         """
         A runner to learn the policy of an environment for a model
 
@@ -449,6 +449,7 @@ class Runner(AbstractEnvRunner):
         self.lam = lam
         self.gamma = gamma
         self.alpha = alpha
+        self.batch_size = batch_size
 
     def run(self):
         """
@@ -478,7 +479,7 @@ class Runner(AbstractEnvRunner):
             mb_neglogpacs.append(neglogpacs)
             mb_dones.append(self.dones)
             mb_model_next_rewards.append(rewards_pred)
-            next_frames = np.concatenate((self.model.scale_obs(self.obs)[:, :, :, 1:], next_frames.reshape(4, 84, 84, 1)), axis=-1)
+            next_frames = np.concatenate((self.model.scale_obs(self.obs)[:, :, :, 1:], next_frames.reshape(self.batch_size, 84, 84, 1)), axis=-1)
             mb_model_next_value = self.model.value_simple(next_frames)
             mb_model_next_values.append(mb_model_next_value)
             clipped_actions = actions
@@ -493,8 +494,8 @@ class Runner(AbstractEnvRunner):
                 if maybe_ep_info is not None:
                     ep_infos.append(maybe_ep_info)
             mb_rewards.append(rewards)
-            mb_next_state = np.zeros((4, 84, 84))
-            for batch in range(4):
+            mb_next_state = np.zeros((self.batch_size, 84, 84))
+            for batch in range(self.batch_size):
                 if self.dones[batch]:
                     # no transition since finished
                     mb_next_state[batch] = old_obs[batch, :, :, -1]

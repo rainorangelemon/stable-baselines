@@ -54,8 +54,12 @@ class POMEPolicy(BasePolicy):
         self._action = None
         self._deterministic_action = None
         self._policy = None
-        self.n_actions = ac_space.n
-        self.n_ob = (ob_space.shape[0], ob_space.shape[1])
+        try:
+            self.n_actions = ac_space.n
+            self.n_ob = (ob_space.shape[0], ob_space.shape[1])
+        except AttributeError:
+            self.n_actions = ac_space.shape[0]
+            self.n_ob = ob_space.shape[0]
         self._kwargs_check(feature_extraction, kwargs)
 
         if layers is not None:
