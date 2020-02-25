@@ -467,21 +467,22 @@ class Runner(AbstractEnvRunner):
         """
         # mb stands for minibatch
         mb_obs, mb_rewards, mb_actions, mb_values, mb_dones, mb_neglogpacs = [], [], [], [], [], []
-        mb_model_next_rewards, mb_model_next_values = [], []
+        epsilon, epsilon_traj = np.zeros((self.n_steps, self.batch_size)), []  # the exploration bonus
+        for i in range(self.batch_size):
+            epsilon_traj.append([0, list()])
+
         mb_next_states = []
         mb_states = self.states
         ep_infos = []
-        for _ in range(self.n_steps):
+        for step in range(self.n_steps):
             actions, values, next_frames, rewards_pred, self.states, neglogpacs = self.model.step(self.obs, self.states, self.dones, need_model=True)
             mb_obs.append(self.obs.copy())
             mb_actions.append(actions)
             mb_values.append(values)
             mb_neglogpacs.append(neglogpacs)
             mb_dones.append(self.dones)
-            mb_model_next_rewards.append(rewards_pred)
             next_frames = np.concatenate((self.model.scale_obs(self.obs)[:, :, :, 1:], next_frames.reshape(self.batch_size, 84, 84, 1)), axis=-1)
             mb_model_next_value = self.model.value_simple(next_frames)
-            mb_model_next_values.append(mb_model_next_value)
             clipped_actions = actions
             # Clip the actions to avoid out of bound error
             if isinstance(self.env.action_space, gym.spaces.Box):
@@ -495,13 +496,26 @@ class Runner(AbstractEnvRunner):
                     ep_infos.append(maybe_ep_info)
             mb_rewards.append(rewards)
             mb_next_state = np.zeros((self.batch_size, 84, 84))
+
+            nextvalues = self.model.value(self.obs, self.states, self.dones)
+            exploration_bonus = np.abs(rewards + self.gamma * nextvalues * self.dones
+                                       - rewards_pred - self.gamma * mb_model_next_value)
+
             for batch in range(self.batch_size):
                 if self.dones[batch]:
                     # no transition since finished
                     mb_next_state[batch] = old_obs[batch, :, :, -1]
+                    # calculate median and refresh array
+                    epsilon_traj[batch][1].append(0)
+                    epsilon_median = np.median(epsilon_traj[batch][1])
+                    epsilon[epsilon_traj[batch][0]:(step+1), batch] = np.array(epsilon_traj[batch][1]) - epsilon_median
+                    epsilon_traj[batch] = [step+1, []]
                 else:
                     # transition using envs
                     mb_next_state[batch] = new_obs[batch, :, :, -1]
+                    # add bonus
+                    epsilon_traj[batch][1].append(exploration_bonus[batch])
+
             mb_next_states.append(mb_next_state)
         # batch of steps to batch of rollouts
         mb_obs = np.asarray(mb_obs, dtype=self.obs.dtype)
@@ -510,8 +524,6 @@ class Runner(AbstractEnvRunner):
         mb_values = np.asarray(mb_values, dtype=np.float32)
         mb_neglogpacs = np.asarray(mb_neglogpacs, dtype=np.float32)
         mb_dones = np.asarray(mb_dones, dtype=np.bool)
-        mb_model_next_rewards = np.asarray(mb_model_next_rewards, dtype=np.float32)
-        mb_model_next_values = np.asarray(mb_model_next_values, dtype=np.float32)
         mb_next_states = np.asarray(mb_next_states, dtype=np.float32)
 
         last_values = self.model.value(self.obs, self.states, self.dones)
@@ -528,9 +540,8 @@ class Runner(AbstractEnvRunner):
                 nextvalues = mb_values[step + 1]
             # delta = r(s') + gamma * V(s') - V(s)
             delta = mb_rewards[step] + self.gamma * nextvalues * nextnonterminal - mb_values[step]
-            exploration_bonus = np.abs(mb_rewards[step] + self.gamma * nextvalues * nextnonterminal - mb_model_next_rewards[step] - self.gamma * mb_model_next_values[step])
-            exploration_bonus = exploration_bonus - np.mean(exploration_bonus)
-            exploration_bonus = np.clip(exploration_bonus, -np.abs(delta), np.abs(delta))
+            # clip the exploration bonus
+            exploration_bonus = np.clip(epsilon[step], -np.abs(delta), np.abs(delta))
             mb_advs[step] = last_gae_lam = delta + self.alpha * exploration_bonus + self.gamma * self.lam * nextnonterminal * last_gae_lam
         mb_returns = mb_advs + mb_values
 

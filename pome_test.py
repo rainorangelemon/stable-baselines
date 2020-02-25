@@ -12,7 +12,7 @@ import tensorflow as tf
 
 tf.logging.set_verbosity(tf.logging.ERROR)
 
-env = make_atari_env('RoadRunner-v0', num_env=4, seed=0)
+env = make_atari_env('Pitfall-v0', num_env=4, seed=0)
 env = VecFrameStack(env, n_stack=4)
 # Optional: PPO2 requires a vectorized environment to run
 # the env is now wrapped automatically when passing it to the constructor
