@@ -101,7 +101,7 @@ class POMEPolicy(BasePolicy):
             output_width = layer_1.shape[2]
             layer_2 = activ(conv(layer_1, 'c4', n_filters=32, filter_size=4, stride=2, init_scale=np.sqrt(2), **kwargs))
             layer_de_2 = activ(deconv(layer_2, 'c5', n_filters=64, filter_size=4, stride=2, output_height=output_height, output_width=output_width, init_scale=np.sqrt(2), **kwargs))
-            layer_de_1 = tf.nn.sigmoid(deconv(layer_de_2, 'c6', n_filters=256, filter_size=8, stride=4, output_height=self.n_ob[0],
+            layer_de_1 = tf.nn.softmax(deconv(layer_de_2, 'c6', n_filters=256, filter_size=8, stride=4, output_height=self.n_ob[0],
                                       output_width=self.n_ob[1], init_scale=np.sqrt(2), **kwargs))
             layer_3 = conv(layer_de_1, 'c7', n_filters=1, filter_size=3, stride=1, pad="SAME", init_scale=np.sqrt(2), **kwargs)
             next_frame = tf.reshape(layer_3, [-1, self.n_ob[0], self.n_ob[1]])
