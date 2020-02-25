@@ -100,13 +100,13 @@ class POMEPolicy(BasePolicy):
             output_height = layer_1.shape[1]
             output_width = layer_1.shape[2]
             layer_2 = activ(conv(layer_1, 'c4', n_filters=32, filter_size=4, stride=2, init_scale=np.sqrt(2), **kwargs))
-            layer_de_2 = activ(deconv(layer_2, 'c5', n_filters=16, filter_size=4, stride=2, output_height=output_height, output_width=output_width, init_scale=np.sqrt(2), **kwargs))
-            layer_de_1 = activ(deconv(layer_de_2, 'c6', n_filters=1, filter_size=8, stride=4, output_height=self.n_ob[0],
+            layer_de_2 = activ(deconv(layer_2, 'c5', n_filters=64, filter_size=4, stride=2, output_height=output_height, output_width=output_width, init_scale=np.sqrt(2), **kwargs))
+            layer_de_1 = tf.nn.sigmoid(deconv(layer_de_2, 'c6', n_filters=256, filter_size=8, stride=4, output_height=self.n_ob[0],
                                       output_width=self.n_ob[1], init_scale=np.sqrt(2), **kwargs))
             layer_3 = conv(layer_de_1, 'c7', n_filters=1, filter_size=3, stride=1, pad="SAME", init_scale=np.sqrt(2), **kwargs)
             next_frame = tf.reshape(layer_3, [-1, self.n_ob[0], self.n_ob[1]])
             rf_latent = conv_to_fc(layer_2)
-            return tf.nn.sigmoid(next_frame), linear(rf_latent, 'rf', 1)
+            return next_frame, linear(rf_latent, 'rf', 1)
 
         with tf.variable_scope("model", reuse=reuse):
             pi_latent = vf_latent = a3c_cnn(self.processed_obs, **kwargs)
