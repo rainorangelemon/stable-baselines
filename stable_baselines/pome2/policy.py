@@ -97,13 +97,11 @@ class POMEPolicy(BasePolicy):
 
             activ = tf.nn.relu
             layer_1 = activ(conv(merge_map, 'c3', n_filters=32, filter_size=4, stride=2, init_scale=np.sqrt(2), **kwargs))
-            output_height = layer_1.shape[1]
-            output_width = layer_1.shape[2]
+            output_height, output_width = layer_1.shape[1], layer_1.shape[2]
             layer_2 = activ(conv(layer_1, 'c4', n_filters=64, filter_size=4, stride=2, init_scale=np.sqrt(2), **kwargs))
             layer_de_2 = activ(deconv(layer_2, 'c5', n_filters=64, filter_size=4, stride=2, output_height=output_height, output_width=output_width, init_scale=np.sqrt(2), **kwargs))
-            layer_de_1 = activ(deconv(layer_de_2, 'c6', n_filters=32, filter_size=4, stride=2, output_height=self.n_ob[0],
-                                      output_width=self.n_ob[1], init_scale=np.sqrt(2), **kwargs))
-            layer_de_0 = tf.nn.softmax(linear_general(layer_de_1, 'logit_frame', 256))
+            layer_de_1 = activ(deconv(layer_de_2, 'c6', n_filters=256, filter_size=4, stride=2, output_height=self.n_ob[0], output_width=self.n_ob[1], init_scale=np.sqrt(2), **kwargs))
+            layer_de_0 = tf.nn.softmax(layer_de_1, axis=-1)
 
             next_frame = tf.reshape(layer_de_0, [-1, 256])
             next_frame = tf.matmul(next_frame, tf.constant(np.arange(0, 256).reshape(256, 1).astype(np.float32)/255))

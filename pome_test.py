@@ -22,8 +22,8 @@ env = VecFrameStack(env, n_stack=4)
 # env = DummyVecEnv([lambda: env])
 
 model = POME2(POMEPolicy, env, verbose=1)
-# model.load('/Users/rainorangelemon/Downloads/pome2.zip')
-model.learn(total_timesteps=100)
+# model.load('/Users/rainorangelemon/Downloads/pome1(1).zip')
+model.learn(total_timesteps=2000)
 
 
 def evaluate(env, model, num_env, num_episode):
