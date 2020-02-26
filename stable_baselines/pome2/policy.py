@@ -106,7 +106,7 @@ class POMEPolicy(BasePolicy):
             layer_de_0 = tf.nn.softmax(linear_general(layer_de_1, 'logit_frame', 256))
 
             next_frame = tf.reshape(layer_de_0, [-1, 256])
-            next_frame = tf.matmul(next_frame, tf.constant(np.arange(0, 256).reshape(256, 1).astype(np.float32)))
+            next_frame = tf.matmul(next_frame, tf.constant(np.arange(0, 256).reshape(256, 1).astype(np.float32)/255))
             next_frame = tf.reshape(next_frame, [-1, self.n_ob[0], self.n_ob[1]])
             rf_latent = conv_to_fc(layer_2)
             return next_frame, linear(rf_latent, 'rf', 1)
@@ -232,3 +232,6 @@ class POMEPolicy(BasePolicy):
 
     def value_simple(self, obs):
         return self.sess.run(self.value_flat, {self.processed_obs: obs})
+
+    def scale_obs(self, obs):
+        return self.sess.run(self.processed_obs, {self.obs_ph: obs})

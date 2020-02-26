@@ -260,6 +260,7 @@ class POME2(ActorCriticRLModel):
                 self.proba_step = act_model.proba_step
                 self.value = act_model.value
                 self.value_simple = act_model.value_simple
+                self.scale_obs = act_model.scale_obs
                 self.initial_state = act_model.initial_state
                 tf.global_variables_initializer().run(session=self.sess)  # pylint: disable=E1101
 
@@ -480,15 +481,15 @@ class Runner(AbstractEnvRunner):
             mb_values.append(values)
             mb_neglogpacs.append(neglogpacs)
             mb_dones.append(self.dones)
-            next_frames = np.concatenate((self.obs[:, :, :, 1:], next_frames.reshape(self.batch_size, 84, 84, 1)), axis=-1)
+            next_frames = np.concatenate((self.model.scale_obs(self.obs)[:, :, :, 1:], next_frames.reshape(self.batch_size, 84, 84, 1)), axis=-1)
             mb_model_next_value = self.model.value_simple(next_frames)
             clipped_actions = actions
             # Clip the actions to avoid out of bound error
             if isinstance(self.env.action_space, gym.spaces.Box):
                 clipped_actions = np.clip(actions, self.env.action_space.low, self.env.action_space.high)
-            old_obs = np.array(self.obs)
+            old_obs = np.array(self.model.scale_obs(self.obs))
             self.obs[:], rewards, self.dones, infos = self.env.step(clipped_actions)
-            new_obs = np.array(self.obs)
+            new_obs = np.array(self.model.scale_obs(self.obs))
             for info in infos:
                 maybe_ep_info = info.get('episode')
                 if maybe_ep_info is not None:
